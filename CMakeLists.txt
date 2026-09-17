@@ -1,19 +1,24 @@
-cmake_minimum_required(VERSION 3.16)
-project(ParkingSy LANGUAGES CXX)
-set(CMAKE_CXX_STANDARD 20)
+
+cmake_minimum_required(VERSION 3.15)
+
+# Project metadata
+project(SmartParkingSystem
+    VERSION 1.0.0
+    DESCRIPTION "Automated Smart Parking Management System (DSA Task 1)"
+    LANGUAGES CXX
+)
+
+# Enforce modern C++ standards
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-#Enabling QT code gens
-set(CMAKE_AUTOMOC ON)
-set(CMAKE_AUTORCC ON)
-set(CMAKE_AUTOUIC ON)
 
+# Define the executable target
+add_executable(parking_system main.cpp)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
-add_executable(app src/main.cpp)
-target_link_libraries(app PRIVATE Qt6::Widgets)
-
-# if environment is windows ha
-if(WIN32)
-    set_target_properties(app PROPERTIES WIN32_EXECUTABLE TRUE)
+# Enable compiler warnings
+if(MSVC)
+    target_compile_options(parking_system PRIVATE /W4 /WX)
+else()
+    target_compile_options(parking_system PRIVATE -Wall -Wextra -Wpedantic)
 endif()
