@@ -9,180 +9,215 @@
 
 using namespace std;
 
-// Structure to store an active parking session
-struct Ticket {
+struct Tariff {
+    double baseRate;
+    int baseHours;
+    double hourlyRate;
+    double vatPercent;
+};
+
+
+struct ActiveVehicle {
     string ticketId;
-    string plateNumber;
-    int slotId;
+    string plate;
+    int bayNumber;
     chrono::system_clock::time_point entryTime;
 };
 
-// Structure to log completed parking transactions
-struct TransactionRecord {
-    string ticketId;
-    string plateNumber;
-    int slotId;
+
+
+struct AuditRecord {
+    string txnId;
+    string plate;
+    int bayNumber;
     double durationHours;
-    double fee;
-    string paymentStatus;
+    double grossTotal;
+    double vatTotal;
+    double netTotal;
+    string paymentMode;
 };
 
-class SmartParkingSystem {
+class ParkingLot {
 private:
-    int totalCapacity;
-    
-    // Min-Heap: Prioritizes allocation of lowest-numbered available slots (O(log n))
-    priority_queue<int, vector<int>, greater<int>> availableSlots;
-    
-    // Hash Table: Fast lookups for parked vehicles by license plate (O(1) average)
-    unordered_map<string, Ticket> activeParkedVehicles;
-    
-    // Log history of processed vehicles
-    vector<TransactionRecord> transactionLogs;
+    int capacity;
+    Tariff rates;
 
-    // Billing rates (in KES)
-    const double BASE_RATE = 100.0;    // First hour charge
-    const double HOURLY_RATE = 50.0;   // Additional hourly charge
+    
+    priority_queue<int, vector<int>, greater<int>> freeBays;
+
+    
+    unordered_map<string, ActiveVehicle> parkedCars;
+
+    
+    vector<AuditRecord> ledger;
 
 public:
-    SmartParkingSystem(int capacity) : totalCapacity(capacity) {
-        for (int i = 1; i <= totalCapacity; ++i) {
-            availableSlots.push(i);
+    ParkingLot(int cap, Tariff initialRates) : capacity(cap), rates(initialRates) {
+        for (int i = 1; i <= capacity; ++i) {
+            freeBays.push(i);
         }
     }
 
-    // Display module: Simulates the digital display screen before vehicle entry
-    void displayAvailableSlots() const {
-        cout << "\n========================================" << endl;
-        cout << "   SMART PARKING SYSTEM DISPLAY PANEL   " << endl;
-        cout << "========================================" << endl;
-        cout << " Total Capacity  : " << totalCapacity << endl;
-        cout << " Available Slots : " << availableSlots.size() << endl;
-        if (availableSlots.empty()) {
-            cout << " Status          : [PARKING FULL - NO ENTRY]" << endl;
+    void showAvailability() const {
+        cout << "\n-\n";
+        cout << " ENTRANCE BOARD: " << freeBays.size() << " / " << capacity << " slots available\n";
+        if (freeBays.empty()) {
+            cout << " STATUS: FULL - Entrance Closed\n";
         } else {
-            cout << " Status          : [SPACES AVAILABLE]" << endl;
+            cout << " STATUS: OPEN\n";
         }
-        cout << "========================================\n" << endl;
+        cout << "-\n";
     }
 
-    // Module A: Vehicle Entry Management
-    void processVehicleEntry(const string& plateNumber) {
-        cout << ">> Incoming Vehicle: " << plateNumber << endl;
-
-        // Verify capacity
-        if (availableSlots.empty()) {
-            cout << "[-] ACCESS DENIED: Facility is at full capacity." << endl;
-            cout << "[-] Barrier status: LOCKED (CLOSED)\n" << endl;
-            return;
-        }
-
-        // Check if the vehicle is already recorded inside
-        if (activeParkedVehicles.find(plateNumber) != activeParkedVehicles.end()) {
-            cout << "[-] ERROR: Duplicate entry! Plate " << plateNumber << " is already parked inside.\n" << endl;
-            return;
-        }
-
-        // Allocate optimal parking slot (lowest ID via min-heap)
-        int assignedSlot = availableSlots.top();
-        availableSlots.pop();
-
-        // Generate ticket details
-        string ticketId = "TKT-" + plateNumber + "-S" + to_string(assignedSlot);
-        auto entryTime = chrono::system_clock::now();
-
-        Ticket newTicket{ticketId, plateNumber, assignedSlot, entryTime};
-        activeParkedVehicles[plateNumber] = newTicket;
-
-        // Confirm entry and simulate barrier gate actuation
-        cout << "[+] TICKET ISSUED SUCCESSFULLY" << endl;
-        cout << "    Ticket ID     : " << ticketId << endl;
-        cout << "    Vehicle Plate : " << plateNumber << endl;
-        cout << "    Assigned Bay  : Slot #" << assignedSlot << endl;
-        cout << "    Barrier Action: OPEN -> VEHICLE ENTERED -> BARRIER CLOSED" << endl;
-
-        displayAvailableSlots();
+    void updateRates(double base, int baseHrs, double hourly, double vat = 16.0) {
+        rates.baseRate = base;
+        rates.baseHours = baseHrs;
+        rates.hourlyRate = hourly;
+        rates.vatPercent = vat;
+        cout << "\n[Admin] Rates updated: KES " << base << " for first " 
+             << baseHrs << " hr(s), KES " << hourly << "/hr thereafter (VAT " << vat << "%).\n";
     }
 
-    // Module B: Vehicle Exit & Billing
-    // Note: simulatedHoursParked lets you test various durations directly.
-    void processVehicleExit(const string& plateNumber, double simulatedHoursParked = 0.0) {
-        cout << ">> Outgoing Vehicle: " << plateNumber << endl;
-
-        auto it = activeParkedVehicles.find(plateNumber);
-        if (it == activeParkedVehicles.end()) {
-            cout << "[-] ERROR: Vehicle plate " << plateNumber << " not found in active records.\n" << endl;
+    void carArrives(const string& plate) {
+        if (plate.empty()) {
+            cout << "Invalid plate number.\n";
             return;
         }
 
-        Ticket ticket = it->second;
-        double duration = simulatedHoursParked;
+        if (freeBays.empty()) {
+            cout << "\nCannot enter: Parking lot is full. Barrier closed.\n";
+            return;
+        }
 
-        // If no simulated hours provided, calculate actual elapsed wall-clock time
-        if (duration <= 0.0) {
-            auto exitTime = chrono::system_clock::now();
-            chrono::duration<double> diff = exitTime - ticket.entryTime;
-            duration = diff.count() / 3600.0;
-            if (duration < 0.01) duration = 1.0; // Minimum default charge unit
+        if (parkedCars.count(plate)) {
+            cout << "\nVehicle " << plate << " is already logged as parked inside.\n";
+            return;
+        }
+
+        int assignedBay = freeBays.top();
+        freeBays.pop();
+
+        string ticket = "TKT-" + plate + "-B" + to_string(assignedBay);
+        auto now = chrono::system_clock::now();
+
+        parkedCars[plate] = {ticket, plate, assignedBay, now};
+
+        cout << "\n--- Ticket Issued ---"
+             << "\nPlate: " << plate
+             << "\nTicket ID: " << ticket
+             << "\nAllocated Bay: #" << assignedBay
+             << "\nBarrier: Opened -> Car entered -> Closed.\n";
+
+        showAvailability();
+    }
+
+    void carExits(const string& plate, const string& payMode, double testHours = -1.0) {
+        auto it = parkedCars.find(plate);
+        if (it == parkedCars.end()) {
+            cout << "\nNo active record found for plate: " << plate << "\n";
+            return;
+        }
+
+        ActiveVehicle car = it->second;
+        double duration = testHours;
+
+        
+        if (duration < 0) {
+            auto now = chrono::system_clock::now();
+            chrono::duration<double> elapsed = now - car.entryTime;
+            duration = elapsed.count() / 3600.0;
+            if (duration < 0.05) duration = 1.0; 
         }
 
         int billedHours = static_cast<int>(ceil(duration));
-        double fee = calculateFee(billedHours);
+        if (billedHours < 1) billedHours = 1;
 
-        cout << "[+] BILLING DETAILS" << endl;
-        cout << "    Ticket ID     : " << ticket.ticketId << endl;
-        cout << "    Slot Released : Bay #" << ticket.slotId << endl;
-        cout << "    Time Elapsed  : " << fixed << setprecision(1) << duration << " hr(s) (" << billedHours << " billable hr)" << endl;
-        cout << "    Amount Due    : KES " << setprecision(2) << fee << endl;
+        
+        double gross = rates.baseRate;
+        if (billedHours > rates.baseHours) {
+            gross += (billedHours - rates.baseHours) * rates.hourlyRate;
+        }
 
-        // Payment verification routine
-        cout << "    Payment Gateway: Awaiting payment confirmation..." << endl;
-        cout << "    Payment Status : SUCCESSFUL (Settled via M-Pesa / Card)" << endl;
-        cout << "    Barrier Action : OPEN -> VEHICLE EXITED -> BARRIER CLOSED" << endl;
+    
+        double vat = gross * (rates.vatPercent / (100.0 + rates.vatPercent));
+        double net = gross - vat;
 
-        // Return the freed slot back to the heap pool
-        availableSlots.push(ticket.slotId);
+        cout << "\n--- Exit & Billing ---"
+             << "\nPlate: " << plate
+             << "\nTime Parked: " << fixed << setprecision(1) << duration << " hr(s) (" << billedHours << " billed)"
+             << "\nTotal Due: KES " << setprecision(2) << gross
+             << "\nPayment via: " << payMode;
 
-        // Record completed transaction history
-        transactionLogs.push_back({ticket.ticketId, plateNumber, ticket.slotId, duration, fee, "PAID"});
+        
+        if (payMode == "M-PESA" || payMode == "CARD" || payMode == "CASH") {
+            cout << "\nPayment verified! Barrier: Opened -> Car cleared -> Closed.\n";
 
-        // Remove vehicle from current active registry
-        activeParkedVehicles.erase(it);
+            
+            freeBays.push(car.bayNumber);
 
-        displayAvailableSlots();
+        
+            string txn = "TXN-" + to_string(ledger.size() + 101);
+            ledger.push_back({txn, plate, car.bayNumber, duration, gross, vat, net, payMode});
+
+            parkedCars.erase(it);
+            showAvailability();
+        } else {
+            cout << "\nPayment not confirmed. Barrier remains locked!\n";
+        }
     }
 
-    double calculateFee(int billedHours) const {
-        if (billedHours <= 1) {
-            return BASE_RATE;
+    void showAuditReport() const {
+        cout << "\n= AUDIT & VAT LEDGER =\n";
+        cout << left << setw(10) << "TXN ID"
+             << setw(12) << "PLATE"
+             << setw(8)  << "HOURS"
+             << setw(10) << "MODE"
+             << setw(14) << "NET (KES)"
+             << setw(14) << "VAT (KES)"
+             << setw(14) << "GROSS (KES)" << "\n";
+        cout << "-\n";
+
+        double sumGross = 0, sumVat = 0, sumNet = 0;
+        for (const auto& row : ledger) {
+            cout << left << setw(10) << row.txnId
+                 << setw(12) << row.plate
+                 << setw(8)  << fixed << setprecision(1) << row.durationHours
+                 << setw(10) << row.paymentMode
+                 << setw(14) << setprecision(2) << row.netTotal
+                 << setw(14) << row.vatTotal
+                 << setw(14) << row.grossTotal << "\n";
+            sumGross += row.grossTotal;
+            sumVat += row.vatTotal;
+            sumNet += row.netTotal;
         }
-        return BASE_RATE + ((billedHours - 1) * HOURLY_RATE);
+
+        cout << "-\n";
+        cout << "TOTALS -> Net: KES " << sumNet 
+             << " | VAT: KES " << sumVat 
+             << " | Gross Collected: KES " << sumGross << "\n";
+        cout << "=\n";
     }
 };
 
 int main() {
-    // Instantiate parking system with a capacity of 4 bays
-    SmartParkingSystem lot(4);
+    Tariff defaultTariff{100.0, 1, 50.0, 16.0};
+    ParkingLot lot(3, defaultTariff);
 
-    // Initial entrance display
-    lot.displayAvailableSlots();
+    lot.showAvailability();
 
-    // 1. Vehicles arrive and are assigned slots
-    lot.processVehicleEntry("KDB 123A");
-    lot.processVehicleEntry("KDA 987Z");
-    lot.processVehicleEntry("KDC 456B");
+    
+    lot.carArrives("KDD 123A");
+    lot.carArrives("KDB 456X");
 
-    // 2. Vehicles exit (supplying simulated parked durations for test calculations)
-    lot.processVehicleExit("KDA 987Z", 0.5); // 30 minutes -> 1 billed hour: KES 100
-    lot.processVehicleExit("KDB 123A", 3.2); // 3.2 hours -> 4 billed hours: KES 250
+    lot.carExits("KDD 123A", "M-PESA", 2.5); 
 
-    // 3. Fill up remaining spaces to demonstrate barrier locking
-    lot.processVehicleEntry("KDD 111C");
-    lot.processVehicleEntry("KDE 222D");
-    lot.processVehicleEntry("KDF 333E");
+    lot.updateRates(150.0, 2, 60.0, 16.0); 
+    lot.carArrives("KDE 789Z");
+    lot.carExits("KDB 456X", "CASH", 1.0);  
+    lot.carExits("KDE 789Z", "CARD", 4.0);  
 
-    // Attempt entry when full
-    lot.processVehicleEntry("KDG 444F");
+    
+    lot.showAuditReport();
 
     return 0;
 }
