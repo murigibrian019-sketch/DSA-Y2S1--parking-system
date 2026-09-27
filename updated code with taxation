@@ -1,0 +1,228 @@
+#include <iostream>
+#include <string>
+#include <vector>
+#include <unordered_map>
+#include <queue>
+#include <chrono>
+#include <cmath>
+#include <iomanip>
+
+using namespace std;
+
+// Stores current tariff details (editable at runtime)
+struct Tariff {
+    double baseRate;
+    int baseHours;
+    double hourlyRate;
+    double vatPercent;
+};
+
+// Represents an actively parked car
+struct ActiveVehicle {
+    string ticketId;
+    string plate;
+    int bayNumber;
+    chrono::system_clock::time_point entryTime;
+};
+
+// Represents an exit record for accounting & audit
+struct AuditRecord {
+    string txnId;
+    string plate;
+    int bayNumber;
+    double durationHours;
+    double grossTotal;
+    double vatTotal;
+    double netTotal;
+    string paymentMode;
+};
+
+class ParkingLot {
+private:
+    int capacity;
+    Tariff rates;
+
+    // Min-heap to always give the lowest bay number first
+    priority_queue<int, vector<int>, greater<int>> freeBays;
+
+    // Hash map for fast lookup on exit using number plate
+    unordered_map<string, ActiveVehicle> parkedCars;
+
+    // Ledger for financial records
+    vector<AuditRecord> ledger;
+
+public:
+    ParkingLot(int cap, Tariff initialRates) : capacity(cap), rates(initialRates) {
+        for (int i = 1; i <= capacity; ++i) {
+            freeBays.push(i);
+        }
+    }
+
+    void showAvailability() const {
+        cout << "\n----------------------------------------\n";
+        cout << " ENTRANCE BOARD: " << freeBays.size() << " / " << capacity << " slots available\n";
+        if (freeBays.empty()) {
+            cout << " STATUS: FULL - Entrance Closed\n";
+        } else {
+            cout << " STATUS: OPEN\n";
+        }
+        cout << "----------------------------------------\n";
+    }
+
+    void updateRates(double base, int baseHrs, double hourly, double vat = 16.0) {
+        rates.baseRate = base;
+        rates.baseHours = baseHrs;
+        rates.hourlyRate = hourly;
+        rates.vatPercent = vat;
+        cout << "\n[Admin] Rates updated: KES " << base << " for first " 
+             << baseHrs << " hr(s), KES " << hourly << "/hr thereafter (VAT " << vat << "%).\n";
+    }
+
+    void carArrives(const string& plate) {
+        if (plate.empty()) {
+            cout << "Invalid plate number.\n";
+            return;
+        }
+
+        if (freeBays.empty()) {
+            cout << "\nCannot enter: Parking lot is full. Barrier closed.\n";
+            return;
+        }
+
+        if (parkedCars.count(plate)) {
+            cout << "\nVehicle " << plate << " is already logged as parked inside.\n";
+            return;
+        }
+
+        int assignedBay = freeBays.top();
+        freeBays.pop();
+
+        string ticket = "TKT-" + plate + "-B" + to_string(assignedBay);
+        auto now = chrono::system_clock::now();
+
+        parkedCars[plate] = {ticket, plate, assignedBay, now};
+
+        cout << "\n--- Ticket Issued ---"
+             << "\nPlate: " << plate
+             << "\nTicket ID: " << ticket
+             << "\nAllocated Bay: #" << assignedBay
+             << "\nBarrier: Opened -> Car entered -> Closed.\n";
+
+        showAvailability();
+    }
+
+    void carExits(const string& plate, const string& payMode, double testHours = -1.0) {
+        auto it = parkedCars.find(plate);
+        if (it == parkedCars.end()) {
+            cout << "\nNo active record found for plate: " << plate << "\n";
+            return;
+        }
+
+        ActiveVehicle car = it->second;
+        double duration = testHours;
+
+        // Use real elapsed time if no simulated hours passed
+        if (duration < 0) {
+            auto now = chrono::system_clock::now();
+            chrono::duration<double> elapsed = now - car.entryTime;
+            duration = elapsed.count() / 3600.0;
+            if (duration < 0.05) duration = 1.0; // Round up minimal test runs
+        }
+
+        int billedHours = static_cast<int>(ceil(duration));
+        if (billedHours < 1) billedHours = 1;
+
+        // Compute fee
+        double gross = rates.baseRate;
+        if (billedHours > rates.baseHours) {
+            gross += (billedHours - rates.baseHours) * rates.hourlyRate;
+        }
+
+        // 16% VAT split
+        double vat = gross * (rates.vatPercent / (100.0 + rates.vatPercent));
+        double net = gross - vat;
+
+        cout << "\n--- Exit & Billing ---"
+             << "\nPlate: " << plate
+             << "\nTime Parked: " << fixed << setprecision(1) << duration << " hr(s) (" << billedHours << " billed)"
+             << "\nTotal Due: KES " << setprecision(2) << gross
+             << "\nPayment via: " << payMode;
+
+        // Barrier gate check
+        if (payMode == "M-PESA" || payMode == "CARD" || payMode == "CASH") {
+            cout << "\nPayment verified! Barrier: Opened -> Car cleared -> Closed.\n";
+
+            // Free the slot
+            freeBays.push(car.bayNumber);
+
+            // Save to audit history
+            string txn = "TXN-" + to_string(ledger.size() + 101);
+            ledger.push_back({txn, plate, car.bayNumber, duration, gross, vat, net, payMode});
+
+            parkedCars.erase(it);
+            showAvailability();
+        } else {
+            cout << "\nPayment not confirmed. Barrier remains locked!\n";
+        }
+    }
+
+    void showAuditReport() const {
+        cout << "\n============================== AUDIT & VAT LEDGER ==============================\n";
+        cout << left << setw(10) << "TXN ID"
+             << setw(12) << "PLATE"
+             << setw(8)  << "HOURS"
+             << setw(10) << "MODE"
+             << setw(14) << "NET (KES)"
+             << setw(14) << "VAT (KES)"
+             << setw(14) << "GROSS (KES)" << "\n";
+        cout << "--------------------------------------------------------------------------------\n";
+
+        double sumGross = 0, sumVat = 0, sumNet = 0;
+        for (const auto& row : ledger) {
+            cout << left << setw(10) << row.txnId
+                 << setw(12) << row.plate
+                 << setw(8)  << fixed << setprecision(1) << row.durationHours
+                 << setw(10) << row.paymentMode
+                 << setw(14) << setprecision(2) << row.netTotal
+                 << setw(14) << row.vatTotal
+                 << setw(14) << row.grossTotal << "\n";
+            sumGross += row.grossTotal;
+            sumVat += row.vatTotal;
+            sumNet += row.netTotal;
+        }
+
+        cout << "--------------------------------------------------------------------------------\n";
+        cout << "TOTALS -> Net: KES " << sumNet 
+             << " | VAT: KES " << sumVat 
+             << " | Gross Collected: KES " << sumGross << "\n";
+        cout << "================================================================================\n";
+    }
+};
+
+int main() {
+    // Initial rate: KES 100 for first 1 hour, KES 50/hr afterwards, 16% VAT
+    Tariff defaultTariff{100.0, 1, 50.0, 16.0};
+    ParkingLot lot(3, defaultTariff); // Lot with 3 slots
+
+    lot.showAvailability();
+
+    // 1. Simulate arrivals
+    lot.carArrives("KDD 123A");
+    lot.carArrives("KDB 456X");
+
+    // 2. Simulate departures (using test hours for predictable checks)
+    lot.carExits("KDD 123A", "M-PESA", 2.5); // 2.5 hrs -> 3 billed hrs (KES 100 + 2*50 = 200)
+
+    // 3. Dynamic rate change by management
+    lot.updateRates(150.0, 2, 60.0, 16.0); // KES 150 for 2 hrs, KES 60/hr after
+
+    // 4. Another arrival and exit under new rates
+    lot.carArrives("KDE 789Z");
+    lot.carExits("KDB 456X", "CASH", 1.0);  // 1 hr exit
+    lot.carExits("KDE 789Z", "CARD", 4.0);  // 4 hrs -> KES 150 + 2*60 = 270
+
+    // 5. Final audit print
+    lot.showAuditReport();
+
+    return 0;
+}
